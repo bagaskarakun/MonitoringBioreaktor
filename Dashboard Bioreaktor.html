@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Bioreaktor 350L Monitoring System</title>
+  
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    :root {
+      --bg: #090e17;
+      --card-bg: #131c2e;
+      --border: #1e293b;
+      --text-main: #f8fafc;
+      --text-sub: #94a3b8;
+      --ph-color: #38bdf8;
+      --tds-color: #34d399;
+      --temp-color: #fb923c;
+      --n-color: #a78bfa;
+      --p-color: #f472b6;
+      --k-color: #facc15;
+      --status-red: #ef4444;
+      --status-yellow: #f59e0b;
+      --status-green: #10b981;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; padding: 12px; display: flex; flex-direction: column; align-items: center; }
+    .container { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 10px; }
+
+    /* Top Bar */
+    .top-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; }
+    .top-bar h1 { font-size: 1.05rem; font-weight: 700; }
+    .badge { font-size: 0.72rem; padding: 4px 10px; border-radius: 999px; font-weight: 600; background: var(--status-red); color: white; transition: 0.3s; }
+    .badge.connected { background: var(--status-green); }
+
+    /* Navigasi Tab */
+    .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; background: #0f172a; padding: 4px; border-radius: 10px; border: 1px solid var(--border); }
+    .tab-btn { background: none; border: none; color: var(--text-sub); font-size: 0.8rem; font-weight: 600; padding: 8px 4px; border-radius: 8px; cursor: pointer; transition: 0.2s; text-align: center; }
+    .tab-btn.active { background: #1e293b; color: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+
+    .tab-content { display: none; flex-direction: column; gap: 10px; }
+    .tab-content.active { display: flex; }
+
+    /* Indikator Skala Kualitas Reaktor (Merah ke Hijau) */
+    .quality-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+    .quality-header { display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 600; margin-bottom: 6px; }
+    .gradient-track { position: relative; height: 12px; border-radius: 6px; background: linear-gradient(to right, #ef4444 0%, #f59e0b 45%, #10b981 85%); margin: 8px 4px; }
+    .pointer { position: absolute; top: -4px; width: 20px; height: 20px; background: #fff; border: 3px solid #0f172a; border-radius: 50%; box-shadow: 0 0 8px rgba(255,255,255,0.7); transform: translateX(-50%); transition: left 0.4s ease; left: 0%; }
+    .scale-labels { display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-sub); }
+
+    /* Grid Metrik Compact */
+    .metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; }
+    .card-title { font-size: 0.72rem; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
+    .card-val { font-size: 1.45rem; font-weight: 800; line-height: 1.1; margin-bottom: 2px; }
+    .card-unit { font-size: 0.65rem; color: var(--text-sub); }
+
+    .ph .card-val { color: var(--ph-color); }
+    .tds .card-val { color: var(--tds-color); }
+    .temp .card-val { color: var(--temp-color); }
+    .n .card-val { color: var(--n-color); }
+    .p .card-val { color: var(--p-color); }
+    .k .card-val { color: var(--k-color); }
+
+    /* Sub-grid EC & Kelembapan */
+    .sub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .sub-card { background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; }
+
+    /* Pengaturan Grafik */
+    .chart-controls { display: flex; gap: 6px; align-items: center; justify-content: center; background: var(--card-bg); padding: 8px; border-radius: 10px; border: 1px solid var(--border); flex-wrap: wrap; }
+    .filter-chip { display: flex; align-items: center; gap: 4px; font-size: 0.75rem; font-weight: 600; padding: 4px 8px; border-radius: 6px; background: #0f172a; cursor: pointer; user-select: none; }
+    .chart-box { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 10px; position: relative; height: 300px; width: 100%; }
+
+    /* Tabel Riwayat */
+    .table-box { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow-x: auto; max-height: 380px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.72rem; min-width: 600px; }
+    th { background: #1e293b; color: var(--text-sub); padding: 8px 10px; position: sticky; top: 0; font-weight: 600; text-align: left; }
+    td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+
+    /* Panel Sheets */
+    .sheets-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 0.8rem; }
+    .sheets-panel input { background: #0f172a; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: #fff; font-size: 0.8rem; width: 100%; }
+    .btn { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 10px; font-weight: 600; cursor: pointer; }
+    .btn:active { transform: scale(0.98); }
+
+    .footer { text-align: center; font-size: 0.7rem; color: #64748b; margin-top: 4px; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="top-bar">
+      <h1>Bioreaktor 350L (7-in-1 Monitoring)</h1>
+      <span id="mqtt-status" class="badge">Menghubungkan...</span>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="openTab('tab-live')">Live</button>
+      <button class="tab-btn" onclick="openTab('tab-chart')">Grafik</button>
+      <button class="tab-btn" onclick="openTab('tab-table')">Tabel</button>
+      <button class="tab-btn" onclick="openTab('tab-sheets')">Sheets</button>
+    </div>
+
+    <!-- TAB 1: LIVE MONITORING -->
+    <div id="tab-live" class="tab-content active">
+      <div class="quality-card">
+        <div class="quality-header">
+          <span style="color: var(--text-sub);">Kualitas Fermentasi</span>
+          <span id="quality-status" style="font-weight: 700; color: var(--status-green);">Memeriksa...</span>
+        </div>
+        <div class="gradient-track">
+          <div id="quality-pointer" class="pointer"></div>
+        </div>
+        <div class="scale-labels">
+          <span>Kritis (pH &gt; 5.2 / &lt; 3.2)</span>
+          <span>Transisi</span>
+          <span>Optimal (pH 3.5 - 4.5)</span>
+        </div>
+      </div>
+
+      <!-- Metrik Utama -->
+      <div class="metrics-grid">
+        <div class="card ph">
+          <div class="card-title">pH Cairan</div>
+          <div id="val-ph" class="card-val">--</div>
+          <div class="card-unit">pH Units</div>
+        </div>
+        <div class="card tds">
+          <div class="card-title">TDS Terlarut</div>
+          <div id="val-tds" class="card-val">--</div>
+          <div class="card-unit">ppm</div>
+        </div>
+        <div class="card temp">
+          <div class="card-title">Suhu Cairan</div>
+          <div id="val-temp" class="card-val">--</div>
+          <div class="card-unit">&deg;C</div>
+        </div>
+      </div>
+
+      <!-- Nutrisi NPK -->
+      <div class="metrics-grid">
+        <div class="card n">
+          <div class="card-title">Nitrogen (N)</div>
+          <div id="val-n" class="card-val">--</div>
+          <div class="card-unit">mg/kg</div>
+        </div>
+        <div class="card p">
+          <div class="card-title">Fosfor (P)</div>
+          <div id="val-p" class="card-val">--</div>
+          <div class="card-unit">mg/kg</div>
+        </div>
+        <div class="card k">
+          <div class="card-title">Kalium (K)</div>
+          <div id="val-k" class="card-val">--</div>
+          <div class="card-unit">mg/kg</div>
+        </div>
+      </div>
+
+      <!-- Sensor Sekunder -->
+      <div class="sub-grid">
+        <div class="sub-card">
+          <span style="color: var(--text-sub);">EC / Konduktivitas:</span>
+          <strong id="val-ec" style="color: #38bdf8;">-- µS/cm</strong>
+        </div>
+        <div class="sub-card">
+          <span style="color: var(--text-sub);">Kelembapan Bioreaktor:</span>
+          <strong id="val-hum" style="color: #34d399;">-- %</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: GRAFIK MULTI-VARIABEL -->
+    <div id="tab-chart" class="tab-content">
+      <div class="chart-controls">
+        <label class="filter-chip" style="color: var(--ph-color);">
+          <input type="checkbox" id="chk-ph" checked onchange="toggleVar(0, this.checked)"> pH
+        </label>
+        <label class="filter-chip" style="color: var(--tds-color);">
+          <input type="checkbox" id="chk-tds" checked onchange="toggleVar(1, this.checked)"> TDS
+        </label>
+        <label class="filter-chip" style="color: var(--temp-color);">
+          <input type="checkbox" id="chk-temp" checked onchange="toggleVar(2, this.checked)"> Suhu
+        </label>
+        <label class="filter-chip" style="color: var(--n-color);">
+          <input type="checkbox" id="chk-n" onchange="toggleVar(3, this.checked)"> N
+        </label>
+        <label class="filter-chip" style="color: var(--p-color);">
+          <input type="checkbox" id="chk-p" onchange="toggleVar(4, this.checked)"> P
+        </label>
+        <label class="filter-chip" style="color: var(--k-color);">
+          <input type="checkbox" id="chk-k" onchange="toggleVar(5, this.checked)"> K
+        </label>
+      </div>
+      <div class="chart-box">
+        <canvas id="multiChart"></canvas>
+      </div>
+    </div>
+
+    <!-- TAB 3: TABEL HISTORI DATA -->
+    <div id="tab-table" class="tab-content">
+      <div class="table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Waktu</th>
+              <th>pH</th>
+              <th>TDS</th>
+              <th>Suhu</th>
+              <th>Hum</th>
+              <th>EC</th>
+              <th>N</th>
+              <th>P</th>
+              <th>K</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            <tr><td colspan="10" style="text-align: center; color: #64748b;">Menunggu data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 4: SINKRONISASI SHEETS -->
+    <div id="tab-sheets" class="tab-content">
+      <div class="sheets-panel">
+        <div><strong>Pencatat Data Google Sheets</strong></div>
+        <p style="color: var(--text-sub); font-size: 0.75rem;">
+          Spreadsheet target: <a href="https://docs.google.com/spreadsheets/d/1miHO-ZvgZHzw1oTi-Jr9r3E1TvhfVchW6x-0WDoWw90/edit" target="_blank" style="color: #38bdf8;">Bioreaktor data</a>
+        </p>
+        <input type="text" id="gas-url" placeholder="https://script.google.com/macros/s/.../exec">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>Simpan Otomatis (Tiap 1 Menit)</span>
+          <input type="checkbox" id="auto-log" checked style="width: auto;">
+        </div>
+        <button class="btn" onclick="sendToSheets(true)">Simpan Data Terkini ke Sheet</button>
+        <div id="sheets-status" style="font-size: 0.75rem; text-align: center; color: #64748b;">Siap mengirim data...</div>
+      </div>
+    </div>
+
+    <div class="footer" id="last-update">Data terakhir: Menunggu sinyal ESP32...</div>
+  </div>
+
+  <script>
+    // --- 1. Inisialisasi MQTT EMQX ---
+    const host = "a01ed2fd.ala.us-east-1.emqxsl.com";
+    const port = 8084;
+    const topic = "bioreaktor/data";
+
+    const mqttClient = mqtt.connect(`wss://${host}:${port}/mqtt`, {
+      clientId: "Bioreaktor_Web_" + Math.random().toString(16).substr(2, 6),
+      username: "busserchan",
+      password: "whitewhitE314"
+    });
+
+    let historyRecords = [];
+    let curData = { ph: null, tds: null, temp: null, hum: null, ec: null, n: null, p: null, k: null };
+
+    // --- 2. Chart.js Multi-Dataset ---
+    const ctx = document.getElementById('multiChart').getContext('2d');
+    const multiChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'pH', borderColor: '#38bdf8', data: [], yAxisID: 'y_ph', tension: 0.25, pointRadius: 2 },
+          { label: 'TDS (ppm)', borderColor: '#34d399', data: [], yAxisID: 'y_tds', tension: 0.25, pointRadius: 2 },
+          { label: 'Suhu (°C)', borderColor: '#fb923c', data: [], yAxisID: 'y_temp', tension: 0.25, pointRadius: 2 },
+          { label: 'N (mg/kg)', borderColor: '#a78bfa', data: [], yAxisID: 'y_npk', tension: 0.25, pointRadius: 2, hidden: true },
+          { label: 'P (mg/kg)', borderColor: '#f472b6', data: [], yAxisID: 'y_npk', tension: 0.25, pointRadius: 2, hidden: true },
+          { label: 'K (mg/kg)', borderColor: '#facc15', data: [], yAxisID: 'y_npk', tension: 0.25, pointRadius: 2, hidden: true }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 6 }, grid: { display: false } },
+          y_ph: { type: 'linear', position: 'left', min: 2, max: 8, ticks: { color: '#38bdf8', font: { size: 9 } } },
+          y_tds: { type: 'linear', position: 'right', min: 0, max: 1500, ticks: { color: '#34d399', font: { size: 9 } }, grid: { display: false } },
+          y_temp: { type: 'linear', display: false, min: 15, max: 50 },
+          y_npk: { type: 'linear', display: false, min: 0, max: 400 }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    function toggleVar(idx, show) {
+      multiChart.data.datasets[idx].hidden = !show;
+      multiChart.update();
+    }
+
+    function evaluateQuality(ph) {
+      if (!ph) return { text: "Menunggu", pct: 0, color: "#64748b" };
+      if (ph >= 3.6 && ph <= 4.4) return { text: "Optimal", pct: 90, color: "var(--status-green)" };
+      if ((ph >= 3.2 && ph < 3.6) || (ph > 4.4 && ph <= 5.0)) return { text: "Transisi", pct: 50, color: "var(--status-yellow)" };
+      return { text: "Kritis", pct: 15, color: "var(--status-red)" };
+    }
+
+    // --- 3. MQTT Handler ---
+    mqttClient.on('connect', () => {
+      const b = document.getElementById('mqtt-status');
+      b.textContent = "Broker Terhubung";
+      b.classList.add('connected');
+      mqttClient.subscribe(topic);
+    });
+
+    mqttClient.on('message', (t, payload) => {
+      try {
+        const d = JSON.parse(payload.toString());
+        const timeNow = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        curData = {
+          ph: parseFloat(d.ph),
+          tds: parseInt(d.tds),
+          temp: parseFloat(d.temp),
+          hum: parseFloat(d.hum),
+          ec: parseInt(d.ec),
+          n: parseInt(d.n),
+          p: parseInt(d.p),
+          k: parseInt(d.k)
+        };
+
+        // Update Elemen Tampilan
+        document.getElementById('val-ph').textContent = curData.ph.toFixed(2);
+        document.getElementById('val-tds').textContent = curData.tds;
+        document.getElementById('val-temp').textContent = curData.temp.toFixed(1);
+        document.getElementById('val-hum').textContent = curData.hum.toFixed(1) + " %";
+        document.getElementById('val-ec').textContent = curData.ec + " µS/cm";
+        document.getElementById('val-n').textContent = curData.n;
+        document.getElementById('val-p').textContent = curData.p;
+        document.getElementById('val-k').textContent = curData.k;
+
+        // Skala Kualitas
+        const q = evaluateQuality(curData.ph);
+        const qStatus = document.getElementById('quality-status');
+        qStatus.textContent = q.text;
+        qStatus.style.color = q.color;
+        document.getElementById('quality-pointer').style.left = q.pct + "%";
+
+        // Grafik & Tabel
+        updateChart(timeNow, curData);
+        addTable(timeNow, curData, q.text);
+
+        document.getElementById('last-update').textContent = `Terakhir diperbarui: ${timeNow}`;
+      } catch (err) {
+        console.error("Parse eror:", err);
+      }
+    });
+
+    function updateChart(time, d) {
+      if (multiChart.data.labels.length > 20) {
+        multiChart.data.labels.shift();
+        multiChart.data.datasets.forEach(ds => ds.data.shift());
+      }
+      multiChart.data.labels.push(time);
+      multiChart.data.datasets[0].data.push(d.ph);
+      multiChart.data.datasets[1].data.push(d.tds);
+      multiChart.data.datasets[2].data.push(d.temp);
+      multiChart.data.datasets[3].data.push(d.n);
+      multiChart.data.datasets[4].data.push(d.p);
+      multiChart.data.datasets[5].data.push(d.k);
+      multiChart.update();
+    }
+
+    function addTable(time, d, status) {
+      historyRecords.unshift({ time, ...d, status });
+      if (historyRecords.length > 25) historyRecords.pop();
+
+      document.getElementById('table-body').innerHTML = historyRecords.map(r => `
+        <tr>
+          <td>${r.time}</td>
+          <td style="color:var(--ph-color);font-weight:600;">${r.ph}</td>
+          <td style="color:var(--tds-color);">${r.tds}</td>
+          <td style="color:var(--temp-color);">${r.temp}</td>
+          <td>${r.hum}</td>
+          <td>${r.ec}</td>
+          <td style="color:var(--n-color);">${r.n}</td>
+          <td style="color:var(--p-color);">${r.p}</td>
+          <td style="color:var(--k-color);">${r.k}</td>
+          <td>${r.status}</td>
+        </tr>
+      `).join('');
+    }
+
+    // --- 4. Navigasi Tab ---
+    function openTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }
+
+    // --- 5. Pengiriman Data ke Google Sheets ---
+    const gasInput = document.getElementById('gas-url');
+    gasInput.value = localStorage.getItem('gas_url_7in1') || '';
+    gasInput.addEventListener('change', () => localStorage.setItem('gas_url_7in1', gasInput.value));
+
+    async function sendToSheets(manual = false) {
+      const url = gasInput.value.trim();
+      const statusLbl = document.getElementById('sheets-status');
+      if (!url) {
+        statusLbl.textContent = "Masukkan URL Web App Apps Script (/exec)!";
+        statusLbl.style.color = "var(--status-red)";
+        return;
+      }
+      if (curData.ph === null) return;
+
+      const q = evaluateQuality(curData.ph);
+      const payload = {
+        timestamp: new Date().toLocaleString('id-ID'),
+        ph: curData.ph,
+        tds: curData.tds,
+        suhu: curData.temp,
+        kelembapan: curData.hum,
+        ec: curData.ec,
+        n: curData.n,
+        p: curData.p,
+        k: curData.k,
+        status: q.text
+      };
+
+      try {
+        await fetch(url, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        statusLbl.textContent = `Tersimpan ke Sheet (${new Date().toLocaleTimeString()})`;
+        statusLbl.style.color = "var(--status-green)";
+      } catch (e) {
+        statusLbl.textContent = "Gagal kirim: " + e.message;
+        statusLbl.style.color = "var(--status-red)";
+      }
+    }
+
+    setInterval(() => {
+      if (document.getElementById('auto-log').checked && gasInput.value.trim()) {
+        sendToSheets(false);
+      }
+    }, 60000);
+  </script>
+</body>
+</html>
